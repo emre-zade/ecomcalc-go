@@ -5,8 +5,12 @@ import (
 	"go/token"
 	"go/types"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
+	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -16,6 +20,45 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+// ===== WINDOWS İÇİN ÖZEL TANIMLAMALAR =====
+var (
+	user32           = syscall.NewLazyDLL("user32.dll")
+	procFindWindowW  = user32.NewProc("FindWindowW")
+	procSetWindowPos = user32.NewProc("SetWindowPos")
+)
+
+const (
+	// DÜZELTME: Negatif sabitleri int32 olarak tanımlıyoruz.
+	wHwndTopmost   int32 = -1
+	wHwndNoTopmost int32 = -2
+	wSwpNosize           = 0x0001
+	wSwpNomove           = 0x0002
+)
+
+func setWindowsAlwaysOnTop(title string, on bool) {
+	// Pencere başlığından (Title) pencereyi bulur
+	ptrTitle, _ := syscall.UTF16PtrFromString(title)
+	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(ptrTitle)))
+
+	if hwnd == 0 {
+		return // Pencere henüz oluşmamış veya bulunamadı
+	}
+
+	// Hedef HWND'yi int32 olarak tanımlayıp syscall sırasında uintptr'ye çeviriyoruz
+	var hwndInsertAfter int32 = wHwndNoTopmost
+	if on {
+		hwndInsertAfter = wHwndTopmost
+	}
+
+	// Pencereyi en üste sabitle (Boyutunu ve yerini değiştirmeden)
+	procSetWindowPos.Call(
+		hwnd,
+		uintptr(hwndInsertAfter), // DÜZELTME: Cast işlemi burada yapılıyor
+		0, 0, 0, 0,
+		uintptr(wSwpNomove|wSwpNosize),
+	)
+}
 
 // ===== HESAPLAMA YAPISI =====
 type Calc struct {
@@ -67,7 +110,6 @@ func hasOperator(s string) bool {
 
 func format0(f float64) string { return fmt.Sprintf("%.0f", f) }
 
-// Matematiksel ifade çözücü (örn: "100+12+5")
 func evalExpr(s string) (float64, bool) {
 	s = replaceCommaDot(s)
 	fs := token.NewFileSet()
@@ -96,7 +138,6 @@ func parseMathOrFloat(s string) float64 {
 
 var (
 	uiUpdating    bool
-	lastChanged   string
 	komisyonLabel *widget.Label
 	karRT         *widget.RichText
 	marjLabel     *widget.Label
@@ -115,6 +156,7 @@ const (
 	pTargetMargin  = "TargetMargin"
 
 	pAlwaysOnTop = "AlwaysOnTop"
+	windowTitle  = "E-Ticaret Hesaplayıcı" // Pencere başlığı sabit olmalı
 )
 
 // ===== MAIN =====
@@ -122,22 +164,16 @@ const (
 func main() {
 	a := app.NewWithID("com.solidmarket.ecomcalc")
 
-	// Tema Ayarı
 	if a.Preferences().BoolWithFallback(pDark, false) {
 		a.Settings().SetTheme(theme.DarkTheme())
 	} else {
 		a.Settings().SetTheme(theme.LightTheme())
 	}
 
-	w := a.NewWindow("E-Ticaret Hesaplayıcı")
-	w.Resize(fyne.NewSize(300, 550))
+	w := a.NewWindow(windowTitle) // Başlığı değişkenden alıyoruz
+	w.Resize(fyne.NewSize(300, 525))
 
-	// Her zaman üstte ayarı (Kaydedilmiş tercih)
 	isAlwaysOnTop := a.Preferences().BoolWithFallback(pAlwaysOnTop, false)
-	if isAlwaysOnTop {
-		//w.SetOnTop(true)
-		// Linux hack'i pencere gösterildikten sonra çalışır, aşağıda tekrar çağıracağız
-	}
 
 	calc := &Calc{Carpan: 1.0, KomisyonP: 15.0, AutoFill: false, TargetMargin: 30}
 
@@ -240,13 +276,10 @@ func main() {
 		if uiUpdating {
 			return
 		}
-
-		// 1. Verileri Oku
 		calc.Alis = parseMathOrFloat(alisEntry.Text)
 		calc.Kargo = parseMathOrFloat(kargoEntry.Text)
 		calc.KomisyonP = parseMathOrFloat(komisyonEntry.Text)
 
-		// 2. Alış Fiyatı İpucu
 		if hasOperator(alisEntry.Text) {
 			alisHint.Text = fmt.Sprintf("≈ %s TL", format0(calc.Alis))
 			alisHint.Show()
@@ -255,45 +288,36 @@ func main() {
 		}
 		alisHint.Refresh()
 
-		// 3. Otomatik Satış Fiyatı Hesaplama
 		if calc.AutoFill {
 			if calc.UseTargetMarg {
-				// Marj formülü: Satis = (Maliyet) / (1 - (Komisyon + Marj))
 				calc.TargetMargin = parseMathOrFloat(targetMarginEntry.Text)
 				totalRate := (calc.KomisyonP + calc.TargetMargin) / 100.0
-
 				if totalRate >= 1.0 {
-					calc.Satis = 0 // Hatalı oran
+					calc.Satis = 0
 				} else {
 					calc.Satis = (calc.Alis + calc.Kargo) / (1.0 - totalRate)
 				}
 			} else {
-				// Çarpan formülü
 				calc.Carpan = parseMathOrFloat(carpanEntry.Text)
 				maliyet := (calc.Alis * calc.Carpan) + calc.Kargo
 				komisyon := maliyet * (calc.KomisyonP / 100)
 				calc.Satis = komisyon + maliyet
 			}
-
-			// Hesaplanan değeri kutucuğa yaz (loop oluşmaması için flag kullanabilirdik ama SetText OnChanged tetikler, basitçe en sona bırakıyoruz)
 			uiUpdating = true
 			satisEntry.SetText(format0(calc.Satis))
 			uiUpdating = false
 		} else {
-			// Manuel giriş
 			calc.Satis = parseMathOrFloat(satisEntry.Text)
 		}
 
-		// 4. Çıktıları Hesapla
 		k := calc.KarTL()
 		cVal := calc.KomisyonTL()
 		m := calc.MarjYuzde()
-
 		refreshOutputs(k, cVal, m)
 		savePrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry)
 	}
 
-	// --- Event Handler'lar (Eksik olan kısım burasıydı) ---
+	// --- Event Handler'lar ---
 	alisEntry.OnChanged = func(s string) { recalc() }
 	satisEntry.OnChanged = func(s string) { recalc() }
 	kargoEntry.OnChanged = func(s string) { recalc() }
@@ -306,7 +330,6 @@ func main() {
 		recalc()
 		applyUIState()
 	}
-
 	useTargetMargCheck.OnChanged = func(b bool) {
 		calc.UseTargetMarg = b
 		recalc()
@@ -315,11 +338,15 @@ func main() {
 
 	alwaysOnTopCheck.OnChanged = func(b bool) {
 		a.Preferences().SetBool(pAlwaysOnTop, b)
-		//w.SetOnTop(b)
-		setLinuxAlwaysOnTop(w.Title(), b)
+
+		if runtime.GOOS == "windows" {
+			setWindowsAlwaysOnTop(windowTitle, b)
+		} else {
+			// Linux/Mac
+			setLinuxAlwaysOnTop(windowTitle, b)
+		}
 	}
 
-	// --- Tema Butonu ---
 	themeBtn := widget.NewButton("Tema Değiştir", func() {
 		dark := !a.Preferences().BoolWithFallback(pDark, false)
 		a.Preferences().SetBool(pDark, dark)
@@ -328,7 +355,6 @@ func main() {
 		} else {
 			a.Settings().SetTheme(theme.LightTheme())
 		}
-		// Renkleri yenile
 		lbls := []*canvas.Text{lblAlis, lblSatis, lblKargo, lblKomisIn, lblCarpan, lblTarget, lblKar, lblKomisOut, lblMarj}
 		for _, t := range lbls {
 			t.Color = theme.ForegroundColor()
@@ -337,7 +363,6 @@ func main() {
 		applyUIState()
 	})
 
-	// --- Layout ---
 	alisCell := container.NewVBox(alisEntry, alisHint)
 	formGrid := container.New(
 		layout.NewFormLayout(),
@@ -352,30 +377,40 @@ func main() {
 		lblMarj, marjLabel,
 	)
 
-	buttons := container.NewVBox(autoFillCheck, useTargetMargCheck, alwaysOnTopCheck, widget.NewSeparator(), themeBtn)
+	objs := []fyne.CanvasObject{autoFillCheck, useTargetMargCheck}
+
+	// Sadece Windows ise "Her Zaman Üstte" butonunu listeye ekle
+	if runtime.GOOS == "windows" {
+		objs = append(objs, alwaysOnTopCheck)
+	}
+	objs = append(objs, widget.NewSeparator(), themeBtn)
+	buttons := container.NewVBox(objs...)
+
 	content := container.NewVBox(formGrid, widget.NewSeparator(), buttons)
 	w.SetContent(content)
 
-	// Başlangıç durumu
 	uiUpdating = true
 	applyUIState()
 	useTargetMargCheck.SetChecked(calc.UseTargetMarg)
 	autoFillCheck.SetChecked(calc.AutoFill)
 	uiUpdating = false
 
-	// Linux için "Her Zaman Üstte" özelliğini pencere açıldıktan hemen sonra tetikle
-	go func() {
-		if isAlwaysOnTop {
-			setLinuxAlwaysOnTop(w.Title(), true)
-		}
-	}()
+	// DEĞİŞİKLİK: Sadece Windows ise başlangıçta "Her Zaman Üstte"yi kontrol et
+	if runtime.GOOS == "windows" {
+		go func() {
+			if isAlwaysOnTop {
+				// Windows penceresinin oluşması için milisaniye beklemek gerekebilir
+				time.Sleep(time.Millisecond * 500)
+				setWindowsAlwaysOnTop(windowTitle, true)
+			}
+		}()
+	}
 
-	recalc() // İlk hesaplama
+	recalc()
 	w.ShowAndRun()
 }
 
 // ---------------- Linux Helper (wmctrl) ----------------
-
 func setLinuxAlwaysOnTop(winTitle string, on bool) {
 	cmdPath, err := exec.LookPath("wmctrl")
 	if err != nil {
@@ -387,12 +422,10 @@ func setLinuxAlwaysOnTop(winTitle string, on bool) {
 	} else {
 		mode = "remove,above"
 	}
-	// wmctrl -r "title" -b add,above
 	exec.Command(cmdPath, "-r", winTitle, "-b", mode).Run()
 }
 
 // ---------------- Prefs Helpers ----------------
-
 func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin *widget.Entry) {
 	p := a.Preferences()
 	alis.SetText(p.StringWithFallback(pAlis, ""))
@@ -401,7 +434,6 @@ func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, target
 	komisyon.SetText(p.StringWithFallback(pKomisyon, "15"))
 	carpan.SetText(p.StringWithFallback(pCarpan, "1"))
 	targetMargin.SetText(p.StringWithFallback(pTargetMargin, "30"))
-
 	c.AutoFill = p.BoolWithFallback(pAuto, false)
 	c.UseTargetMarg = p.BoolWithFallback(pUseTargetMarg, false)
 }
