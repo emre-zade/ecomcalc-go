@@ -18,7 +18,6 @@ import (
 )
 
 // ===== HESAPLAMA YAPISI =====
-
 type Calc struct {
 	Alis          float64
 	Satis         float64
