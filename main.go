@@ -392,6 +392,7 @@ func setLinuxAlwaysOnTop(winTitle string, on bool) {
 }
 
 // ---------------- Prefs Helpers ----------------
+
 func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin *widget.Entry) {
 	p := a.Preferences()
 	alis.SetText(p.StringWithFallback(pAlis, ""))
