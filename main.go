@@ -376,6 +376,7 @@ func main() {
 }
 
 // ---------------- Linux Helper (wmctrl) ----------------
+
 func setLinuxAlwaysOnTop(winTitle string, on bool) {
 	cmdPath, err := exec.LookPath("wmctrl")
 	if err != nil {
