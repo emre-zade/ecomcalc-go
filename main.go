@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
@@ -29,7 +27,6 @@ var (
 )
 
 const (
-	// DÜZELTME: Negatif sabitleri int32 olarak tanımlıyoruz.
 	wHwndTopmost   int32 = -1
 	wHwndNoTopmost int32 = -2
 	wSwpNosize           = 0x0001
@@ -37,24 +34,18 @@ const (
 )
 
 func setWindowsAlwaysOnTop(title string, on bool) {
-	// Pencere başlığından (Title) pencereyi bulur
 	ptrTitle, _ := syscall.UTF16PtrFromString(title)
 	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(ptrTitle)))
-
 	if hwnd == 0 {
-		return // Pencere henüz oluşmamış veya bulunamadı
+		return
 	}
-
-	// Hedef HWND'yi int32 olarak tanımlayıp syscall sırasında uintptr'ye çeviriyoruz
 	var hwndInsertAfter int32 = wHwndNoTopmost
 	if on {
 		hwndInsertAfter = wHwndTopmost
 	}
-
-	// Pencereyi en üste sabitle (Boyutunu ve yerini değiştirmeden)
 	procSetWindowPos.Call(
 		hwnd,
-		uintptr(hwndInsertAfter), // DÜZELTME: Cast işlemi burada yapılıyor
+		uintptr(hwndInsertAfter),
 		0, 0, 0, 0,
 		uintptr(wSwpNomove|wSwpNosize),
 	)
@@ -82,33 +73,8 @@ func (c *Calc) MarjYuzde() float64 {
 }
 
 // ===== YARDIMCI FONKSİYONLAR =====
-
-func replaceCommaDot(s string) string {
-	r := []rune(s)
-	for i := range r {
-		if r[i] == ',' {
-			r[i] = '.'
-		}
-	}
-	return string(r)
-}
-
-func parseFloatStrict(s string) (float64, bool) {
-	f, err := strconv.ParseFloat(replaceCommaDot(strings.TrimSpace(s)), 64)
-	return f, err == nil
-}
-
-func hasOperator(s string) bool {
-	s = strings.TrimSpace(s)
-	for _, r := range s {
-		if strings.ContainsRune("+-*/()", r) {
-			return true
-		}
-	}
-	return false
-}
-
-func format0(f float64) string { return fmt.Sprintf("%.0f", f) }
+func replaceCommaDot(s string) string { return strings.ReplaceAll(s, ",", ".") }
+func format0(f float64) string        { return fmt.Sprintf("%.0f", f) }
 
 func evalExpr(s string) (float64, bool) {
 	s = replaceCommaDot(s)
@@ -128,150 +94,102 @@ func parseMathOrFloat(s string) float64 {
 	if v, ok := evalExpr(s); ok {
 		return v
 	}
-	if f, ok := parseFloatStrict(s); ok {
+	f, err := strconv.ParseFloat(replaceCommaDot(strings.TrimSpace(s)), 64)
+	if err == nil {
 		return f
 	}
 	return 0
 }
 
-// ===== UYGULAMA DEĞİŞKENLERİ =====
+// PAZARYERİ HESAPLAMA (YENİ)
+func calculateMarketPrice(base float64, input string) float64 {
+	input = strings.TrimSpace(input)
+	if len(input) < 2 {
+		return base
+	}
+	op := input[0]
+	valStr := replaceCommaDot(input[1:])
+	val, _ := strconv.ParseFloat(valStr, 64)
 
-var (
-	uiUpdating    bool
-	komisyonLabel *widget.Label
-	karRT         *widget.RichText
-	marjLabel     *widget.Label
-)
+	switch op {
+	case '+':
+		return base + val
+	case '-':
+		return base - val
+	case '*':
+		return base * val
+	case '/':
+		if val != 0 {
+			return base / val
+		}
+	}
+	return base
+}
 
 const (
-	pAlis     = "Alis"
-	pSatis    = "Satis"
-	pKargo    = "Kargo"
-	pKomisyon = "KomisyonP"
-	pCarpan   = "Carpan"
-	pAuto     = "AutoFill"
-	pDark     = "DarkTheme"
-
+	pAlis          = "Alis"
+	pSatis         = "Satis"
+	pKargo         = "Kargo"
+	pKomisyon      = "KomisyonP"
+	pCarpan        = "Carpan"
+	pAuto          = "AutoFill"
+	pDark          = "DarkTheme"
 	pUseTargetMarg = "UseTargetMargin"
 	pTargetMargin  = "TargetMargin"
+	pAlwaysOnTop   = "AlwaysOnTop"
+	windowTitle    = "E-Ticaret Hesaplayıcı"
 
-	pAlwaysOnTop = "AlwaysOnTop"
-	windowTitle  = "E-Ticaret Hesaplayıcı" // Pencere başlığı sabit olmalı
+	// Yeni Prefs
+	pHBFormula    = "HBFormula"
+	pPTTFormula   = "PTTFormula"
+	pPazarFormula = "PazarFormula"
 )
-
-// ===== MAIN =====
 
 func main() {
 	a := app.NewWithID("com.solidmarket.ecomcalc")
-
 	if a.Preferences().BoolWithFallback(pDark, false) {
 		a.Settings().SetTheme(theme.DarkTheme())
 	} else {
 		a.Settings().SetTheme(theme.LightTheme())
 	}
 
-	w := a.NewWindow(windowTitle) // Başlığı değişkenden alıyoruz
-	w.Resize(fyne.NewSize(300, 525))
+	w := a.NewWindow(windowTitle)
+	w.Resize(fyne.NewSize(280, 560))
 
-	isAlwaysOnTop := a.Preferences().BoolWithFallback(pAlwaysOnTop, false)
+	calc := &Calc{}
+	uiUpdating := false
 
-	calc := &Calc{Carpan: 1.0, KomisyonP: 15.0, AutoFill: false, TargetMargin: 30}
-
-	// --- Girdiler ---
+	// Girdiler
 	alisEntry := widget.NewEntry()
-	alisEntry.SetPlaceHolder("(örn: 100+10)")
-	satisEntry := widget.NewEntry()
-	satisEntry.SetPlaceHolder("0")
-	kargoEntry := widget.NewEntry()
-	kargoEntry.SetPlaceHolder("rakam yaz")
-	komisyonEntry := widget.NewEntry()
-	komisyonEntry.SetPlaceHolder("rakam yaz")
-	carpanEntry := widget.NewEntry()
-	carpanEntry.SetPlaceHolder("rakam yaz")
-	targetMarginEntry := widget.NewEntry()
-	targetMarginEntry.SetPlaceHolder("rakam yaz")
-
-	// --- Etiket Oluşturucular ---
-	mkLabel := func(text string) *canvas.Text {
-		t := canvas.NewText(text, theme.ForegroundColor())
-		t.TextSize = theme.TextSize()
-		return t
-	}
-	lblAlis := mkLabel("Alış Fiyatı (TL):")
-	lblSatis := mkLabel("Satış Fiyatı (TL):")
-	lblKargo := mkLabel("Kargo Fiyatı (TL):")
-	lblKomisIn := mkLabel("Komisyon Oranı (%):")
-	lblCarpan := mkLabel("Çarpan Oranı (x):")
-	lblTarget := mkLabel("Hedef Marj (%):")
-	lblKar := mkLabel("Kâr:")
-	lblKomisOut := mkLabel("Komisyon Tutarı:")
-	lblMarj := mkLabel("Kâr Marjı:")
-
-	alisHint := canvas.NewText("", theme.DisabledColor())
-	alisHint.TextSize = theme.TextSize() - 1
-	alisHint.Hide()
-
-	komisyonLabel = widget.NewLabel("0 TL")
-	karRT = widget.NewRichText(&widget.TextSegment{
-		Text:  "0 TL",
-		Style: widget.RichTextStyle{ColorName: theme.ColorNameSuccess},
+	alisPasteBtn := widget.NewButtonWithIcon("", theme.ContentPasteIcon(), func() {
+		alisEntry.SetText(w.Clipboard().Content())
 	})
-	marjLabel = widget.NewLabel("0 %")
+	satisEntry := widget.NewEntry()
+	satisCopyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		w.Clipboard().SetContent(satisEntry.Text)
+	})
+	kargoEntry := widget.NewEntry()
+	komisyonEntry := widget.NewEntry()
+	carpanEntry := widget.NewEntry()
+	targetMarginEntry := widget.NewEntry()
 
-	// --- Kontroller ---
-	autoFillCheck := widget.NewCheck("Satışı Otomatik Hesapla", nil)
-	useTargetMargCheck := widget.NewCheck("Hedef Marjı Kullan", nil)
-	alwaysOnTopCheck := widget.NewCheck("Her Zaman Üstte", nil)
+	// Pazaryeri Girdileri (YENİ)
+	hbFormula := widget.NewEntry()
+	hbFormula.SetPlaceHolder("Örn: *1.05")
+	hbResult := widget.NewEntry()
 
-	// --- Tercihleri Yükle ---
-	loadPrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry)
-	alwaysOnTopCheck.SetChecked(isAlwaysOnTop)
+	pttFormula := widget.NewEntry()
+	pttFormula.SetPlaceHolder("Örn: +15")
+	pttResult := widget.NewEntry()
 
-	// --- UI Yardımcıları ---
-	applyUIState := func() {
-		lblCarpan.Color = theme.ForegroundColor()
-		lblTarget.Color = theme.ForegroundColor()
+	pazarFormula := widget.NewEntry()
+	pazarFormula.SetPlaceHolder("Örn: *0.95")
+	pazarResult := widget.NewEntry()
 
-		if !calc.AutoFill {
-			carpanEntry.Disable()
-			targetMarginEntry.Disable()
-			lblCarpan.Color = theme.DisabledColor()
-			lblTarget.Color = theme.DisabledColor()
-		} else {
-			if calc.UseTargetMarg {
-				targetMarginEntry.Enable()
-				carpanEntry.Disable()
-				lblTarget.Color = theme.ForegroundColor()
-				lblCarpan.Color = theme.DisabledColor()
-			} else {
-				targetMarginEntry.Disable()
-				carpanEntry.Enable()
-				lblCarpan.Color = theme.ForegroundColor()
-				lblTarget.Color = theme.DisabledColor()
-			}
-		}
-		lblCarpan.Refresh()
-		lblTarget.Refresh()
-	}
+	komisyonLabel := widget.NewLabel("0 TL")
+	karRT := widget.NewRichText(&widget.TextSegment{Text: "0 TL"})
+	marjLabel := widget.NewLabel("0 %")
 
-	refreshOutputs := func(kar, komisyon, marj float64) {
-		seg := &widget.TextSegment{Text: fmt.Sprintf("%s TL", format0(kar))}
-		if kar >= 0 {
-			seg.Style = widget.RichTextStyle{ColorName: theme.ColorNameSuccess}
-		} else {
-			seg.Style = widget.RichTextStyle{ColorName: theme.ColorNameError}
-		}
-		karRT.Segments = []widget.RichTextSegment{seg}
-		karRT.Refresh()
-
-		komisyonLabel.SetText(format0(komisyon) + " TL")
-		komisyonLabel.Refresh()
-
-		marjLabel.SetText(format0(marj) + " %")
-		marjLabel.Refresh()
-	}
-
-	// --- Ana Hesaplama Fonksiyonu ---
 	recalc := func() {
 		if uiUpdating {
 			return
@@ -279,14 +197,6 @@ func main() {
 		calc.Alis = parseMathOrFloat(alisEntry.Text)
 		calc.Kargo = parseMathOrFloat(kargoEntry.Text)
 		calc.KomisyonP = parseMathOrFloat(komisyonEntry.Text)
-
-		if hasOperator(alisEntry.Text) {
-			alisHint.Text = fmt.Sprintf("≈ %s TL", format0(calc.Alis))
-			alisHint.Show()
-		} else {
-			alisHint.Hide()
-		}
-		alisHint.Refresh()
 
 		if calc.AutoFill {
 			if calc.UseTargetMarg {
@@ -300,8 +210,7 @@ func main() {
 			} else {
 				calc.Carpan = parseMathOrFloat(carpanEntry.Text)
 				maliyet := (calc.Alis * calc.Carpan) + calc.Kargo
-				komisyon := maliyet * (calc.KomisyonP / 100)
-				calc.Satis = komisyon + maliyet
+				calc.Satis = (maliyet * (calc.KomisyonP / 100)) + maliyet
 			}
 			uiUpdating = true
 			satisEntry.SetText(format0(calc.Satis))
@@ -310,99 +219,110 @@ func main() {
 			calc.Satis = parseMathOrFloat(satisEntry.Text)
 		}
 
-		k := calc.KarTL()
-		cVal := calc.KomisyonTL()
-		m := calc.MarjYuzde()
-		refreshOutputs(k, cVal, m)
-		savePrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry)
-	}
-
-	// --- Event Handler'lar ---
-	alisEntry.OnChanged = func(s string) { recalc() }
-	satisEntry.OnChanged = func(s string) { recalc() }
-	kargoEntry.OnChanged = func(s string) { recalc() }
-	komisyonEntry.OnChanged = func(s string) { recalc() }
-	carpanEntry.OnChanged = func(s string) { recalc() }
-	targetMarginEntry.OnChanged = func(s string) { recalc() }
-
-	autoFillCheck.OnChanged = func(b bool) {
-		calc.AutoFill = b
-		recalc()
-		applyUIState()
-	}
-	useTargetMargCheck.OnChanged = func(b bool) {
-		calc.UseTargetMarg = b
-		recalc()
-		applyUIState()
-	}
-
-	alwaysOnTopCheck.OnChanged = func(b bool) {
-		a.Preferences().SetBool(pAlwaysOnTop, b)
-
-		if runtime.GOOS == "windows" {
-			setWindowsAlwaysOnTop(windowTitle, b)
+		// UI GÜNCELLEME
+		kar := calc.KarTL()
+		seg := &widget.TextSegment{Text: fmt.Sprintf("%s TL", format0(kar))}
+		if kar >= 0 {
+			seg.Style = widget.RichTextStyle{ColorName: theme.ColorNameSuccess}
 		} else {
-			// Linux/Mac
-			setLinuxAlwaysOnTop(windowTitle, b)
+			seg.Style = widget.RichTextStyle{ColorName: theme.ColorNameError}
 		}
+		karRT.Segments = []widget.RichTextSegment{seg}
+		karRT.Refresh()
+		komisyonLabel.SetText(format0(calc.KomisyonTL()) + " TL")
+		marjLabel.SetText(format0(calc.MarjYuzde()) + " %")
+
+		// Pazaryeri Güncelleme (YENİ)
+		hbResult.SetText(format0(calculateMarketPrice(calc.Satis, hbFormula.Text)))
+		pttResult.SetText(format0(calculateMarketPrice(calc.Satis, pttFormula.Text)))
+		pazarResult.SetText(format0(calculateMarketPrice(calc.Satis, pazarFormula.Text)))
+
+		savePrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula)
 	}
 
-	themeBtn := widget.NewButton("Tema Değiştir", func() {
-		dark := !a.Preferences().BoolWithFallback(pDark, false)
-		a.Preferences().SetBool(pDark, dark)
-		if dark {
-			a.Settings().SetTheme(theme.DarkTheme())
+	// Eventler
+	entries := []*widget.Entry{alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula}
+	for _, e := range entries {
+		e.OnChanged = func(s string) { recalc() }
+	}
+
+	// Pazaryeri Paneli (YENİ)
+	copyBtn := func(e *widget.Entry) *widget.Button {
+		return widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() { w.Clipboard().SetContent(e.Text) })
+	}
+	marketGrid := container.NewVBox(
+		widget.NewSeparator(),
+		container.NewGridWithColumns(3, widget.NewLabel("Hepsiburada:"), hbFormula, container.NewBorder(nil, nil, nil, copyBtn(hbResult), hbResult)),
+		container.NewGridWithColumns(3, widget.NewLabel("PttAVM:"), pttFormula, container.NewBorder(nil, nil, nil, copyBtn(pttResult), pttResult)),
+		container.NewGridWithColumns(3, widget.NewLabel("Pazarama:"), pazarFormula, container.NewBorder(nil, nil, nil, copyBtn(pazarResult), pazarResult)),
+	)
+	marketGrid.Hide()
+
+	expandBtn := widget.NewButtonWithIcon("Pazaryerlerini Göster", theme.MenuExpandIcon(), func() {
+		if marketGrid.Visible() {
+			marketGrid.Hide()
+			w.Resize(fyne.NewSize(280, 560))
 		} else {
-			a.Settings().SetTheme(theme.LightTheme())
+			marketGrid.Show()
+			w.Resize(fyne.NewSize(330, 685))
 		}
-		lbls := []*canvas.Text{lblAlis, lblSatis, lblKargo, lblKomisIn, lblCarpan, lblTarget, lblKar, lblKomisOut, lblMarj}
-		for _, t := range lbls {
-			t.Color = theme.ForegroundColor()
-			t.Refresh()
-		}
-		applyUIState()
 	})
 
-	alisCell := container.NewVBox(alisEntry, alisHint)
-	formGrid := container.New(
-		layout.NewFormLayout(),
-		lblAlis, alisCell,
-		lblSatis, satisEntry,
-		lblKargo, kargoEntry,
-		lblKomisIn, komisyonEntry,
-		lblCarpan, carpanEntry,
-		lblTarget, targetMarginEntry,
-		lblKar, karRT,
-		lblKomisOut, komisyonLabel,
-		lblMarj, marjLabel,
+	// Checkboxlar
+	autoFillCheck := widget.NewCheck("Otomatik Hesapla", func(b bool) { calc.AutoFill = b; recalc() })
+	useTargetMargCheck := widget.NewCheck("Hedef Marjı Kullan", func(b bool) { calc.UseTargetMarg = b; recalc() })
+	alwaysOnTopCheck := widget.NewCheck("Her Zaman Üstte", func(b bool) {
+		a.Preferences().SetBool(pAlwaysOnTop, b)
+		if runtime.GOOS == "windows" {
+			setWindowsAlwaysOnTop(windowTitle, b)
+		}
+	})
+
+	// Layout
+	form := container.New(layout.NewFormLayout(),
+		widget.NewLabel("Alış (TL):"),
+		container.NewBorder(nil, nil, nil, alisPasteBtn, alisEntry), // Sağda Yapıştır butonu
+
+		widget.NewLabel("Baz Satış (TL):"),
+		container.NewBorder(nil, nil, nil, satisCopyBtn, satisEntry), // Sağda Kopyala butonu
+
+		widget.NewLabel("Kargo (TL):"), kargoEntry,
+		widget.NewLabel("Komisyon (%):"), komisyonEntry,
+		widget.NewLabel("Çarpan (x):"), carpanEntry,
+		widget.NewLabel("Hedef Marj (%):"), targetMarginEntry,
+		widget.NewLabel("Kâr:"), karRT,
+		widget.NewLabel("Komisyon:"), komisyonLabel,
+		widget.NewLabel("Marj:"), marjLabel,
 	)
 
-	objs := []fyne.CanvasObject{autoFillCheck, useTargetMargCheck}
-
-	// Sadece Windows ise "Her Zaman Üstte" butonunu listeye ekle
-	if runtime.GOOS == "windows" {
-		objs = append(objs, alwaysOnTopCheck)
-	}
-	objs = append(objs, widget.NewSeparator(), themeBtn)
-	buttons := container.NewVBox(objs...)
-
-	content := container.NewVBox(formGrid, widget.NewSeparator(), buttons)
-	w.SetContent(content)
-
 	uiUpdating = true
-	applyUIState()
-	useTargetMargCheck.SetChecked(calc.UseTargetMarg)
-	autoFillCheck.SetChecked(calc.AutoFill)
+	loadPrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula, autoFillCheck, useTargetMargCheck, alwaysOnTopCheck)
 	uiUpdating = false
 
-	// DEĞİŞİKLİK: Sadece Windows ise başlangıçta "Her Zaman Üstte"yi kontrol et
-	if runtime.GOOS == "windows" {
-		go func() {
-			if isAlwaysOnTop {
-				// Windows penceresinin oluşması için milisaniye beklemek gerekebilir
-				time.Sleep(time.Millisecond * 500)
-				setWindowsAlwaysOnTop(windowTitle, true)
+	content := container.NewVScroll(container.NewVBox(
+		form,
+		widget.NewSeparator(),
+		autoFillCheck, useTargetMargCheck, alwaysOnTopCheck,
+		expandBtn,
+		marketGrid,
+		widget.NewButton("Tema Değiştir", func() {
+			dark := !a.Preferences().BoolWithFallback(pDark, false)
+			a.Preferences().SetBool(pDark, dark)
+			if dark {
+				a.Settings().SetTheme(theme.DarkTheme())
+			} else {
+				a.Settings().SetTheme(theme.LightTheme())
 			}
+		}),
+	))
+
+	w.SetContent(content)
+
+	// Başlangıç "Always on Top" kontrolü
+	if runtime.GOOS == "windows" && a.Preferences().BoolWithFallback(pAlwaysOnTop, false) {
+		go func() {
+			time.Sleep(time.Millisecond * 500)
+			setWindowsAlwaysOnTop(windowTitle, true)
 		}()
 	}
 
@@ -410,35 +330,29 @@ func main() {
 	w.ShowAndRun()
 }
 
-// ---------------- Linux Helper (wmctrl) ----------------
-func setLinuxAlwaysOnTop(winTitle string, on bool) {
-	cmdPath, err := exec.LookPath("wmctrl")
-	if err != nil {
-		return
-	}
-	var mode string
-	if on {
-		mode = "add,above"
-	} else {
-		mode = "remove,above"
-	}
-	exec.Command(cmdPath, "-r", winTitle, "-b", mode).Run()
-}
-
-// ---------------- Prefs Helpers ----------------
-func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin *widget.Entry) {
+func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin, hb, ptt, pazar *widget.Entry, auto, target, top *widget.Check) {
 	p := a.Preferences()
+
 	alis.SetText(p.StringWithFallback(pAlis, ""))
 	satis.SetText(p.StringWithFallback(pSatis, ""))
 	kargo.SetText(p.StringWithFallback(pKargo, ""))
 	komisyon.SetText(p.StringWithFallback(pKomisyon, "15"))
 	carpan.SetText(p.StringWithFallback(pCarpan, "1"))
 	targetMargin.SetText(p.StringWithFallback(pTargetMargin, "30"))
-	c.AutoFill = p.BoolWithFallback(pAuto, false)
-	c.UseTargetMarg = p.BoolWithFallback(pUseTargetMarg, false)
+
+	hb.SetText(p.StringWithFallback(pHBFormula, "*1"))
+	ptt.SetText(p.StringWithFallback(pPTTFormula, "*1"))
+	pazar.SetText(p.StringWithFallback(pPazarFormula, "*1"))
+
+	auto.SetChecked(p.BoolWithFallback(pAuto, false))
+	target.SetChecked(p.BoolWithFallback(pUseTargetMarg, false))
+	top.SetChecked(p.BoolWithFallback(pAlwaysOnTop, false))
+
+	c.AutoFill = auto.Checked
+	c.UseTargetMarg = target.Checked
 }
 
-func savePrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin *widget.Entry) {
+func savePrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin, hb, ptt, pazar *widget.Entry) {
 	p := a.Preferences()
 	p.SetString(pAlis, alis.Text)
 	p.SetString(pSatis, satis.Text)
@@ -446,6 +360,11 @@ func savePrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, target
 	p.SetString(pKomisyon, komisyon.Text)
 	p.SetString(pCarpan, carpan.Text)
 	p.SetString(pTargetMargin, targetMargin.Text)
+
+	p.SetString(pHBFormula, hb.Text)
+	p.SetString(pPTTFormula, ptt.Text)
+	p.SetString(pPazarFormula, pazar.Text)
+
 	p.SetBool(pAuto, c.AutoFill)
 	p.SetBool(pUseTargetMarg, c.UseTargetMarg)
 }
