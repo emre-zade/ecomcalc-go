@@ -7,9 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -18,38 +16,6 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
-
-// ===== WINDOWS İÇİN ÖZEL TANIMLAMALAR =====
-var (
-	user32           = syscall.NewLazyDLL("user32.dll")
-	procFindWindowW  = user32.NewProc("FindWindowW")
-	procSetWindowPos = user32.NewProc("SetWindowPos")
-)
-
-const (
-	wHwndTopmost   int32 = -1
-	wHwndNoTopmost int32 = -2
-	wSwpNosize           = 0x0001
-	wSwpNomove           = 0x0002
-)
-
-func setWindowsAlwaysOnTop(title string, on bool) {
-	ptrTitle, _ := syscall.UTF16PtrFromString(title)
-	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(ptrTitle)))
-	if hwnd == 0 {
-		return
-	}
-	var hwndInsertAfter int32 = wHwndNoTopmost
-	if on {
-		hwndInsertAfter = wHwndTopmost
-	}
-	procSetWindowPos.Call(
-		hwnd,
-		uintptr(hwndInsertAfter),
-		0, 0, 0, 0,
-		uintptr(wSwpNomove|wSwpNosize),
-	)
-}
 
 // ===== HESAPLAMA YAPISI =====
 type Calc struct {
@@ -200,17 +166,33 @@ func main() {
 
 		if calc.AutoFill {
 			if calc.UseTargetMarg {
+				// TargetMargin artık kutuya yazdığın "Net Kâr Yüzdesi" olacak.
+				// Örn: 100 yazarsan, alış fiyatın kadar NET kâr hedefler.
 				calc.TargetMargin = parseMathOrFloat(targetMarginEntry.Text)
-				totalRate := (calc.KomisyonP + calc.TargetMargin) / 100.0
-				if totalRate >= 1.0 {
+
+				markupOrani := calc.TargetMargin / 100.0
+				komisyonOrani := calc.KomisyonP / 100.0
+
+				// DOĞRU FORMÜL: (Alış * (1 + KârOranı) + Kargo) / (1 - KomisyonOranı)
+				// Bu formül, pazar yeri komisyonu kesildikten sonra eline tam olarak
+				// istediğin net kârın geçmesini sağlar.
+				if komisyonOrani >= 1.0 {
 					calc.Satis = 0
 				} else {
-					calc.Satis = (calc.Alis + calc.Kargo) / (1.0 - totalRate)
+					calc.Satis = (calc.Alis*(1.0+markupOrani) + calc.Kargo) / (1.0 - komisyonOrani)
 				}
 			} else {
+				// Çarpan (Multiplier) mantığı için düzeltme:
 				calc.Carpan = parseMathOrFloat(carpanEntry.Text)
 				maliyet := (calc.Alis * calc.Carpan) + calc.Kargo
-				calc.Satis = (maliyet * (calc.KomisyonP / 100)) + maliyet
+				komisyonOrani := calc.KomisyonP / 100.0
+
+				// Çarpanla belirlenen rakamın eline net geçmesi için:
+				if komisyonOrani >= 1.0 {
+					calc.Satis = 0
+				} else {
+					calc.Satis = maliyet / (1.0 - komisyonOrani)
+				}
 			}
 			uiUpdating = true
 			satisEntry.SetText(format0(calc.Satis))
@@ -219,7 +201,7 @@ func main() {
 			calc.Satis = parseMathOrFloat(satisEntry.Text)
 		}
 
-		// UI GÜNCELLEME
+		// UI GÜNCELLEME (Kâr ve Marj hesaplamaların mevcut yapıda kalsın)
 		kar := calc.KarTL()
 		seg := &widget.TextSegment{Text: fmt.Sprintf("%s TL", format0(kar))}
 		if kar >= 0 {
@@ -229,10 +211,11 @@ func main() {
 		}
 		karRT.Segments = []widget.RichTextSegment{seg}
 		karRT.Refresh()
+
 		komisyonLabel.SetText(format0(calc.KomisyonTL()) + " TL")
 		marjLabel.SetText(format0(calc.MarjYuzde()) + " %")
 
-		// Pazaryeri Güncelleme (YENİ)
+		// Pazaryeri Güncelleme
 		hbResult.SetText(format0(calculateMarketPrice(calc.Satis, hbFormula.Text)))
 		pttResult.SetText(format0(calculateMarketPrice(calc.Satis, pttFormula.Text)))
 		pazarResult.SetText(format0(calculateMarketPrice(calc.Satis, pazarFormula.Text)))
@@ -289,7 +272,7 @@ func main() {
 		widget.NewLabel("Kargo (TL):"), kargoEntry,
 		widget.NewLabel("Komisyon (%):"), komisyonEntry,
 		widget.NewLabel("Çarpan (x):"), carpanEntry,
-		widget.NewLabel("Hedef Marj (%):"), targetMarginEntry,
+		widget.NewLabel("Kâr Oranı (Markup %):"), targetMarginEntry,
 		widget.NewLabel("Kâr:"), karRT,
 		widget.NewLabel("Komisyon:"), komisyonLabel,
 		widget.NewLabel("Marj:"), marjLabel,
