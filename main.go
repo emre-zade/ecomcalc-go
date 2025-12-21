@@ -67,7 +67,6 @@ func parseMathOrFloat(s string) float64 {
 	return 0
 }
 
-// PAZARYERİ HESAPLAMA (YENİ)
 func calculateMarketPrice(base float64, input string) float64 {
 	input = strings.TrimSpace(input)
 	if len(input) < 2 {
@@ -105,7 +104,6 @@ const (
 	pAlwaysOnTop   = "AlwaysOnTop"
 	windowTitle    = "E-Ticaret Hesaplayıcı"
 
-	// Yeni Prefs
 	pHBFormula    = "HBFormula"
 	pPTTFormula   = "PTTFormula"
 	pPazarFormula = "PazarFormula"
@@ -120,7 +118,7 @@ func main() {
 	}
 
 	w := a.NewWindow(windowTitle)
-	w.Resize(fyne.NewSize(280, 560))
+	w.Resize(fyne.NewSize(300, 600))
 
 	calc := &Calc{}
 	uiUpdating := false
@@ -139,7 +137,7 @@ func main() {
 	carpanEntry := widget.NewEntry()
 	targetMarginEntry := widget.NewEntry()
 
-	// Pazaryeri Girdileri (YENİ)
+	// Pazaryeri Girdileri
 	hbFormula := widget.NewEntry()
 	hbFormula.SetPlaceHolder("Örn: *1.05")
 	hbResult := widget.NewEntry()
@@ -156,6 +154,22 @@ func main() {
 	karRT := widget.NewRichText(&widget.TextSegment{Text: "0 TL"})
 	marjLabel := widget.NewLabel("0 %")
 
+	// Input Aktif/Pasif Yönetimi
+	updateInputStates := func() {
+		if calc.AutoFill {
+			if calc.UseTargetMarg {
+				targetMarginEntry.Enable()
+				carpanEntry.Disable()
+			} else {
+				targetMarginEntry.Disable()
+				carpanEntry.Enable()
+			}
+		} else {
+			targetMarginEntry.Disable()
+			carpanEntry.Disable()
+		}
+	}
+
 	recalc := func() {
 		if uiUpdating {
 			return
@@ -166,28 +180,20 @@ func main() {
 
 		if calc.AutoFill {
 			if calc.UseTargetMarg {
-				// TargetMargin artık kutuya yazdığın "Net Kâr Yüzdesi" olacak.
-				// Örn: 100 yazarsan, alış fiyatın kadar NET kâr hedefler.
 				calc.TargetMargin = parseMathOrFloat(targetMarginEntry.Text)
-
 				markupOrani := calc.TargetMargin / 100.0
 				komisyonOrani := calc.KomisyonP / 100.0
 
-				// DOĞRU FORMÜL: (Alış * (1 + KârOranı) + Kargo) / (1 - KomisyonOranı)
-				// Bu formül, pazar yeri komisyonu kesildikten sonra eline tam olarak
-				// istediğin net kârın geçmesini sağlar.
 				if komisyonOrani >= 1.0 {
 					calc.Satis = 0
 				} else {
 					calc.Satis = (calc.Alis*(1.0+markupOrani) + calc.Kargo) / (1.0 - komisyonOrani)
 				}
 			} else {
-				// Çarpan (Multiplier) mantığı için düzeltme:
 				calc.Carpan = parseMathOrFloat(carpanEntry.Text)
 				maliyet := (calc.Alis * calc.Carpan) + calc.Kargo
 				komisyonOrani := calc.KomisyonP / 100.0
 
-				// Çarpanla belirlenen rakamın eline net geçmesi için:
 				if komisyonOrani >= 1.0 {
 					calc.Satis = 0
 				} else {
@@ -201,7 +207,6 @@ func main() {
 			calc.Satis = parseMathOrFloat(satisEntry.Text)
 		}
 
-		// UI GÜNCELLEME (Kâr ve Marj hesaplamaların mevcut yapıda kalsın)
 		kar := calc.KarTL()
 		seg := &widget.TextSegment{Text: fmt.Sprintf("%s TL", format0(kar))}
 		if kar >= 0 {
@@ -215,7 +220,6 @@ func main() {
 		komisyonLabel.SetText(format0(calc.KomisyonTL()) + " TL")
 		marjLabel.SetText(format0(calc.MarjYuzde()) + " %")
 
-		// Pazaryeri Güncelleme
 		hbResult.SetText(format0(calculateMarketPrice(calc.Satis, hbFormula.Text)))
 		pttResult.SetText(format0(calculateMarketPrice(calc.Satis, pttFormula.Text)))
 		pazarResult.SetText(format0(calculateMarketPrice(calc.Satis, pazarFormula.Text)))
@@ -223,13 +227,11 @@ func main() {
 		savePrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula)
 	}
 
-	// Eventler
 	entries := []*widget.Entry{alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula}
 	for _, e := range entries {
 		e.OnChanged = func(s string) { recalc() }
 	}
 
-	// Pazaryeri Paneli (YENİ)
 	copyBtn := func(e *widget.Entry) *widget.Button {
 		return widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() { w.Clipboard().SetContent(e.Text) })
 	}
@@ -244,16 +246,23 @@ func main() {
 	expandBtn := widget.NewButtonWithIcon("Pazaryerlerini Göster", theme.MenuExpandIcon(), func() {
 		if marketGrid.Visible() {
 			marketGrid.Hide()
-			w.Resize(fyne.NewSize(280, 560))
+			w.Resize(fyne.NewSize(300, 600))
 		} else {
 			marketGrid.Show()
-			w.Resize(fyne.NewSize(330, 685))
+			w.Resize(fyne.NewSize(330, 720))
 		}
 	})
 
-	// Checkboxlar
-	autoFillCheck := widget.NewCheck("Otomatik Hesapla", func(b bool) { calc.AutoFill = b; recalc() })
-	useTargetMargCheck := widget.NewCheck("Hedef Marjı Kullan", func(b bool) { calc.UseTargetMarg = b; recalc() })
+	autoFillCheck := widget.NewCheck("Otomatik Hesapla", func(b bool) {
+		calc.AutoFill = b
+		updateInputStates()
+		recalc()
+	})
+	useTargetMargCheck := widget.NewCheck("Hedef Net Kâr Kullan", func(b bool) {
+		calc.UseTargetMarg = b
+		updateInputStates()
+		recalc()
+	})
 	alwaysOnTopCheck := widget.NewCheck("Her Zaman Üstte", func(b bool) {
 		a.Preferences().SetBool(pAlwaysOnTop, b)
 		if runtime.GOOS == "windows" {
@@ -261,25 +270,21 @@ func main() {
 		}
 	})
 
-	// Layout
 	form := container.New(layout.NewFormLayout(),
-		widget.NewLabel("Alış (TL):"),
-		container.NewBorder(nil, nil, nil, alisPasteBtn, alisEntry), // Sağda Yapıştır butonu
-
-		widget.NewLabel("Baz Satış (TL):"),
-		container.NewBorder(nil, nil, nil, satisCopyBtn, satisEntry), // Sağda Kopyala butonu
-
-		widget.NewLabel("Kargo (TL):"), kargoEntry,
-		widget.NewLabel("Komisyon (%):"), komisyonEntry,
-		widget.NewLabel("Çarpan (x):"), carpanEntry,
-		widget.NewLabel("Kâr Oranı (Markup %):"), targetMarginEntry,
-		widget.NewLabel("Kâr:"), karRT,
-		widget.NewLabel("Komisyon:"), komisyonLabel,
-		widget.NewLabel("Marj:"), marjLabel,
+		widget.NewLabel("Alış Fiyatı (TL):"), container.NewBorder(nil, nil, nil, alisPasteBtn, alisEntry),
+		widget.NewLabel("Baz Satış (TL):"), container.NewBorder(nil, nil, nil, satisCopyBtn, satisEntry),
+		widget.NewLabel("Kargo Ücreti (TL):"), kargoEntry,
+		widget.NewLabel("Pazaryeri Kom. (%):"), komisyonEntry,
+		widget.NewLabel("Maliyet Çarpanı (x):"), carpanEntry,
+		widget.NewLabel("Hedef Net Kâr (%):"), targetMarginEntry,
+		widget.NewLabel("Net Kâr (TL):"), karRT,
+		widget.NewLabel("Komisyon (TL):"), komisyonLabel,
+		widget.NewLabel("Satış Marjı (%):"), marjLabel,
 	)
 
 	uiUpdating = true
 	loadPrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula, autoFillCheck, useTargetMargCheck, alwaysOnTopCheck)
+	updateInputStates() // Başlangıçta hangi kutular açık olacak ayarla
 	uiUpdating = false
 
 	content := container.NewVScroll(container.NewVBox(
@@ -301,7 +306,6 @@ func main() {
 
 	w.SetContent(content)
 
-	// Başlangıç "Always on Top" kontrolü
 	if runtime.GOOS == "windows" && a.Preferences().BoolWithFallback(pAlwaysOnTop, false) {
 		go func() {
 			time.Sleep(time.Millisecond * 500)
@@ -315,22 +319,18 @@ func main() {
 
 func loadPrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, targetMargin, hb, ptt, pazar *widget.Entry, auto, target, top *widget.Check) {
 	p := a.Preferences()
-
 	alis.SetText(p.StringWithFallback(pAlis, ""))
 	satis.SetText(p.StringWithFallback(pSatis, ""))
 	kargo.SetText(p.StringWithFallback(pKargo, ""))
 	komisyon.SetText(p.StringWithFallback(pKomisyon, "15"))
 	carpan.SetText(p.StringWithFallback(pCarpan, "1"))
 	targetMargin.SetText(p.StringWithFallback(pTargetMargin, "30"))
-
 	hb.SetText(p.StringWithFallback(pHBFormula, "*1"))
 	ptt.SetText(p.StringWithFallback(pPTTFormula, "*1"))
 	pazar.SetText(p.StringWithFallback(pPazarFormula, "*1"))
-
 	auto.SetChecked(p.BoolWithFallback(pAuto, false))
 	target.SetChecked(p.BoolWithFallback(pUseTargetMarg, false))
 	top.SetChecked(p.BoolWithFallback(pAlwaysOnTop, false))
-
 	c.AutoFill = auto.Checked
 	c.UseTargetMarg = target.Checked
 }
@@ -343,11 +343,9 @@ func savePrefs(a fyne.App, c *Calc, alis, satis, kargo, komisyon, carpan, target
 	p.SetString(pKomisyon, komisyon.Text)
 	p.SetString(pCarpan, carpan.Text)
 	p.SetString(pTargetMargin, targetMargin.Text)
-
 	p.SetString(pHBFormula, hb.Text)
 	p.SetString(pPTTFormula, ptt.Text)
 	p.SetString(pPazarFormula, pazar.Text)
-
 	p.SetBool(pAuto, c.AutoFill)
 	p.SetBool(pUseTargetMarg, c.UseTargetMarg)
 }
