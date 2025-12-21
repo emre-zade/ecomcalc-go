@@ -118,7 +118,7 @@ func main() {
 	}
 
 	w := a.NewWindow(windowTitle)
-	w.Resize(fyne.NewSize(300, 600))
+	w.Resize(fyne.NewSize(260, 565))
 
 	calc := &Calc{}
 	uiUpdating := false
@@ -246,10 +246,10 @@ func main() {
 	expandBtn := widget.NewButtonWithIcon("Pazaryerlerini Göster", theme.MenuExpandIcon(), func() {
 		if marketGrid.Visible() {
 			marketGrid.Hide()
-			w.Resize(fyne.NewSize(300, 600))
+			w.Resize(fyne.NewSize(260, 565))
 		} else {
 			marketGrid.Show()
-			w.Resize(fyne.NewSize(330, 720))
+			w.Resize(fyne.NewSize(330, 690))
 		}
 	})
 
