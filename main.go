@@ -232,16 +232,30 @@ func main() {
 		e.OnChanged = func(s string) { recalc() }
 	}
 
+	fixWidth := func(entry *widget.Entry, width float32) fyne.CanvasObject {
+		return container.NewGridWrap(fyne.NewSize(width, 38), entry)
+	}
+
 	copyBtn := func(e *widget.Entry) *widget.Button {
 		return widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() { w.Clipboard().SetContent(e.Text) })
 	}
+
 	marketGrid := container.NewVBox(
 		widget.NewSeparator(),
-		container.NewGridWithColumns(3, widget.NewLabel("Hepsiburada:"), hbFormula, container.NewBorder(nil, nil, nil, copyBtn(hbResult), hbResult)),
-		container.NewGridWithColumns(3, widget.NewLabel("PttAVM:"), pttFormula, container.NewBorder(nil, nil, nil, copyBtn(pttResult), pttResult)),
-		container.NewGridWithColumns(3, widget.NewLabel("Pazarama:"), pazarFormula, container.NewBorder(nil, nil, nil, copyBtn(pazarResult), pazarResult)),
+		container.New(layout.NewFormLayout(),
+			// Hepsiburada Satırı
+			widget.NewLabel("Hepsiburada:"),
+			container.NewBorder(nil, nil, fixWidth(hbFormula, 60), copyBtn(hbResult), hbResult),
+
+			// PttAVM Satırı
+			widget.NewLabel("PttAVM:"),
+			container.NewBorder(nil, nil, fixWidth(pttFormula, 60), copyBtn(pttResult), pttResult),
+
+			// Pazarama Satırı
+			widget.NewLabel("Pazarama:"),
+			container.NewBorder(nil, nil, fixWidth(pazarFormula, 60), copyBtn(pazarResult), pazarResult),
+		),
 	)
-	marketGrid.Hide()
 
 	expandBtn := widget.NewButtonWithIcon("Pazaryerlerini Göster", theme.MenuExpandIcon(), func() {
 		if marketGrid.Visible() {
@@ -249,7 +263,7 @@ func main() {
 			w.Resize(fyne.NewSize(260, 565))
 		} else {
 			marketGrid.Show()
-			w.Resize(fyne.NewSize(330, 690))
+			w.Resize(fyne.NewSize(285, 695))
 		}
 	})
 
@@ -312,6 +326,8 @@ func main() {
 			setWindowsAlwaysOnTop(windowTitle, true)
 		}()
 	}
+
+	marketGrid.Hide()
 
 	recalc()
 	w.ShowAndRun()
