@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
+	"image/color"
 	"runtime"
 	"strconv"
 	"strings"
@@ -11,11 +12,46 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+// ===== ÖZEL TEMA YAPISI (FONT KÜÇÜLTME) =====
+type myTheme struct {
+	fyne.Theme
+}
+
+func (m myTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameText {
+		return 12 // Daha zarif görünüm için
+	}
+	if name == theme.SizeNameCaptionText {
+		return 10
+	}
+	if name == theme.SizeNameInlineIcon {
+		return 18
+	}
+	if name == theme.SizeNamePadding {
+		return 4
+	}
+	return m.Theme.Size(name)
+}
+
+func applyCustomTheme(a fyne.App, dark bool) {
+	if dark {
+		a.Settings().SetTheme(&myTheme{Theme: theme.DarkTheme()})
+	} else {
+		a.Settings().SetTheme(&myTheme{Theme: theme.LightTheme()})
+	}
+}
+
+type themeSize struct {
+	Height float32
+	Width  float32
+}
 
 // ===== HESAPLAMA YAPISI =====
 type Calc struct {
@@ -111,23 +147,31 @@ const (
 
 func main() {
 	a := app.NewWithID("com.solidmarket.ecomcalc")
-	if a.Preferences().BoolWithFallback(pDark, false) {
-		a.Settings().SetTheme(theme.DarkTheme())
-	} else {
-		a.Settings().SetTheme(theme.LightTheme())
-	}
 
+	isDark := a.Preferences().BoolWithFallback(pDark, false)
+	applyCustomTheme(a, isDark)
+
+	myThemeSize := themeSize{
+		Width:  258,
+		Height: 545,
+	}
 	w := a.NewWindow(windowTitle)
-	w.Resize(fyne.NewSize(260, 565))
+	w.Resize(fyne.NewSize(myThemeSize.Width, myThemeSize.Height))
 
 	calc := &Calc{}
 	uiUpdating := false
 
 	// Girdiler
 	alisEntry := widget.NewEntry()
+	alisEntry.SetPlaceHolder("Örn: 10+5")
 	alisPasteBtn := widget.NewButtonWithIcon("", theme.ContentPasteIcon(), func() {
 		alisEntry.SetText(w.Clipboard().Content())
 	})
+
+	// Alış Fiyatı Önizleme Etiketi (Gri ve Sola Hizalı)
+	alisPreviewLabel := canvas.NewText("", color.NRGBA{128, 128, 128, 255})
+	alisPreviewLabel.TextSize = 10
+
 	satisEntry := widget.NewEntry()
 	satisCopyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		w.Clipboard().SetContent(satisEntry.Text)
@@ -174,6 +218,16 @@ func main() {
 		if uiUpdating {
 			return
 		}
+
+		// Alış Fiyatı Matematik Önizlemesi - SOLA HİZALI MANTIK
+		alisRaw := alisEntry.Text
+		if val, ok := evalExpr(alisRaw); ok && strings.ContainsAny(alisRaw, "+-*/") {
+			alisPreviewLabel.Text = "= " + format0(val)
+		} else {
+			alisPreviewLabel.Text = ""
+		}
+		alisPreviewLabel.Refresh()
+
 		calc.Alis = parseMathOrFloat(alisEntry.Text)
 		calc.Kargo = parseMathOrFloat(kargoEntry.Text)
 		calc.KomisyonP = parseMathOrFloat(komisyonEntry.Text)
@@ -233,7 +287,7 @@ func main() {
 	}
 
 	fixWidth := func(entry *widget.Entry, width float32) fyne.CanvasObject {
-		return container.NewGridWrap(fyne.NewSize(width, 38), entry)
+		return container.NewGridWrap(fyne.NewSize(width, 34), entry)
 	}
 
 	copyBtn := func(e *widget.Entry) *widget.Button {
@@ -243,15 +297,10 @@ func main() {
 	marketGrid := container.NewVBox(
 		widget.NewSeparator(),
 		container.New(layout.NewFormLayout(),
-			// Hepsiburada Satırı
 			widget.NewLabel("Hepsiburada:"),
 			container.NewBorder(nil, nil, fixWidth(hbFormula, 60), copyBtn(hbResult), hbResult),
-
-			// PttAVM Satırı
 			widget.NewLabel("PttAVM:"),
 			container.NewBorder(nil, nil, fixWidth(pttFormula, 60), copyBtn(pttResult), pttResult),
-
-			// Pazarama Satırı
 			widget.NewLabel("Pazarama:"),
 			container.NewBorder(nil, nil, fixWidth(pazarFormula, 60), copyBtn(pazarResult), pazarResult),
 		),
@@ -260,10 +309,10 @@ func main() {
 	expandBtn := widget.NewButtonWithIcon("Pazaryerlerini Göster", theme.MenuExpandIcon(), func() {
 		if marketGrid.Visible() {
 			marketGrid.Hide()
-			w.Resize(fyne.NewSize(260, 565))
+			w.Resize(fyne.NewSize(myThemeSize.Width, myThemeSize.Height))
 		} else {
 			marketGrid.Show()
-			w.Resize(fyne.NewSize(285, 695))
+			w.Resize(fyne.NewSize(myThemeSize.Width, 665))
 		}
 	})
 
@@ -284,8 +333,14 @@ func main() {
 		}
 	})
 
+	// Alış Girişini ve Önizleme Etiketini SOLA HİZALI olarak birleştiriyoruz
+	alisGroup := container.NewVBox(
+		container.NewBorder(nil, nil, nil, alisPasteBtn, alisEntry),
+		container.NewHBox(alisPreviewLabel), // Artık Spacer yok, doğrudan sola yaslı
+	)
+
 	form := container.New(layout.NewFormLayout(),
-		widget.NewLabel("Alış Fiyatı (TL):"), container.NewBorder(nil, nil, nil, alisPasteBtn, alisEntry),
+		widget.NewLabel("Alış Fiyatı (TL):"), alisGroup,
 		widget.NewLabel("Baz Satış (TL):"), container.NewBorder(nil, nil, nil, satisCopyBtn, satisEntry),
 		widget.NewLabel("Kargo Ücreti (TL):"), kargoEntry,
 		widget.NewLabel("Pazaryeri Kom. (%):"), komisyonEntry,
@@ -310,11 +365,7 @@ func main() {
 		widget.NewButton("Tema Değiştir", func() {
 			dark := !a.Preferences().BoolWithFallback(pDark, false)
 			a.Preferences().SetBool(pDark, dark)
-			if dark {
-				a.Settings().SetTheme(theme.DarkTheme())
-			} else {
-				a.Settings().SetTheme(theme.LightTheme())
-			}
+			applyCustomTheme(a, dark)
 		}),
 	))
 
