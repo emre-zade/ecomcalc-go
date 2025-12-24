@@ -298,7 +298,7 @@ func main() {
 
 	uiUpdating = true
 	loadPrefs(a, calc, alisEntry, satisEntry, kargoEntry, komisyonEntry, carpanEntry, targetMarginEntry, hbFormula, pttFormula, pazarFormula, autoFillCheck, useTargetMargCheck, alwaysOnTopCheck)
-	updateInputStates() // Başlangıçta hangi kutular açık olacak ayarla
+	updateInputStates()
 	uiUpdating = false
 
 	content := container.NewVScroll(container.NewVBox(
