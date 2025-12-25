@@ -39,7 +39,7 @@ go install fyne.io/fyne/v2/cmd/fyne@latest
 # 2) Projeye geç
 cd ecomcalc-go
 # 3) Paketle (appID'yi değiştirebilirsin)
-fyne package -os android -app-id com.solidmarket.ecomcalc -name "EComCalc"
+fyne package -os android -app-id com.market.ecomcalc -name "EComCalc"
 # Çıktı: EComCalc.apk (bin/ klasörü)
 ```
 
