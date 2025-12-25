@@ -19,7 +19,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// ===== ÖZEL TEMA YAPISI (FONT KÜÇÜLTME) =====
+// ==== ÖZEL TEMA YAPISI (FONT KÜÇÜLTME) ====
 type myTheme struct {
 	fyne.Theme
 }
